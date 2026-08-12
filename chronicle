@@ -83,57 +83,64 @@ def insert_in_section(lines: list[str], start: int, bullet: str) -> None:
     lines.insert(i, bullet + "\n")
 
 
+def load_config_parser(config_path: Path) -> configparser.ConfigParser:
+    """Parsed config file at `config_path`, exiting with a clean error on invalid syntax."""
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(config_path)
+    except configparser.Error as e:
+        print(f"chronicle: invalid config file {config_path}: {e}", file=sys.stderr)
+        raise SystemExit(1)
+    return parser
+
+
 def read_config_root_dir(config_path: Path) -> str | None:
     """Value of `root_dir` in `config_path`, or None if unset/missing."""
     if not config_path.exists():
         return None
-    parser = configparser.ConfigParser()
-    parser.read(config_path)
+    parser = load_config_parser(config_path)
     return parser.get(CONFIG_SECTION, CONFIG_KEY, fallback=None)
 
 
-def write_config_root_dir(root_dir: str) -> None:
-    """Set `root_dir` in the default config file, preserving other settings."""
-    parser = configparser.ConfigParser()
-    parser.read(DEFAULT_CONFIG_PATH)
+def write_config_root_dir(config_path: Path, root_dir: str) -> None:
+    """Set `root_dir` in `config_path`, preserving other settings."""
+    parser = load_config_parser(config_path)
     if not parser.has_section(CONFIG_SECTION):
         parser.add_section(CONFIG_SECTION)
     parser.set(CONFIG_SECTION, CONFIG_KEY, root_dir)
-    DEFAULT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with DEFAULT_CONFIG_PATH.open("w") as f:
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with config_path.open("w") as f:
         parser.write(f)
 
 
-def prompt_for_root_dir() -> Path:
-    """Interactively ask for a root directory and persist it to the default
-    config file. Exits the process if not running interactively or if the
-    answer is blank.
+def prompt_for_root_dir(config_path: Path) -> Path:
+    """Interactively ask for a root directory and persist it to `config_path`.
+    Exits the process if not running interactively or if the answer is blank.
     """
     if not sys.stdin.isatty():
         print(
             f"chronicle: no root directory configured; set {ENV_VAR} or "
-            f"'{CONFIG_KEY}' under [{CONFIG_SECTION}] in {DEFAULT_CONFIG_PATH}",
+            f"'{CONFIG_KEY}' under [{CONFIG_SECTION}] in {config_path}",
             file=sys.stderr,
         )
         raise SystemExit(1)
 
     answer = input(
-        f"chronicle: no root directory configured. Enter one to save to "
-        f"{DEFAULT_CONFIG_PATH}: "
+        f"chronicle: no root directory configured. Enter one to save to {config_path}: "
     ).strip()
     if not answer:
         print("chronicle: no root directory given", file=sys.stderr)
         raise SystemExit(1)
 
-    write_config_root_dir(answer)
-    return Path(answer).expanduser()
+    write_config_root_dir(config_path, answer)
+    return Path(answer).expanduser().resolve()
 
 
 def resolve_chronicle_dir(config_path: Path, config_path_is_explicit: bool) -> Path:
     """Root directory for chronicle files, per the documented precedence."""
     env_value = os.environ.get(ENV_VAR)
     if env_value:
-        return Path(env_value).expanduser()
+        return Path(env_value).expanduser().resolve()
 
     if config_path_is_explicit and not config_path.exists():
         print(f"chronicle: config file not found: {config_path}", file=sys.stderr)
@@ -141,9 +148,9 @@ def resolve_chronicle_dir(config_path: Path, config_path_is_explicit: bool) -> P
 
     config_value = read_config_root_dir(config_path)
     if config_value:
-        return Path(config_value).expanduser()
+        return Path(config_value).expanduser().resolve()
 
-    return prompt_for_root_dir()
+    return prompt_for_root_dir(config_path)
 
 
 def parse_args() -> argparse.Namespace:
