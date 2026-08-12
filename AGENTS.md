@@ -14,3 +14,7 @@
 - Assume the reader is a python expert
 - Run `ruff format` on python files to reformat before comitting
 - Use best practices of the programming language you are using
+
+# Testing
+- Add unit tests for new functionality
+- Run unit tests to check your work
