@@ -1,2 +1,2 @@
 # Instructions for Claude
-- Follow instructions in the Agents.md file
+- Follow instructions in the @AGENTS.md file
