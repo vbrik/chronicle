@@ -31,10 +31,22 @@ This produces (and extends) a file structured like:
 
 ## Setup
 
-Journal files live in `~/proj/notes/notes/chronicles/`, named
-`<year>-q<quarter>.md` (e.g. `2026-q3.md`), currently hardcoded in
-`chronicle` (`CHRONICLE_DIR`). Symlink the script onto your `PATH`, e.g.:
+Symlink the script onto your `PATH`, e.g.:
 
 ```
 ln -s "$(pwd)/chronicle" ~/.local/bin/chronicle
 ```
+
+Journal files are named `<year>-q<quarter>.md` (e.g. `2026-q3.md`) inside a
+root directory, resolved in this order:
+
+1. the `CHRONICLE_ROOT_DIR` environment variable
+2. the `root_dir` setting in a config file, `~/.config/chronicle/chronicle.conf`
+   by default, or the path given with `--config`:
+   ```ini
+   [chronicle]
+   root_dir = ~/proj/notes/notes/chronicles
+   ```
+
+If neither is set, `chronicle` interactively prompts for a root directory
+and saves it to the default config file location.

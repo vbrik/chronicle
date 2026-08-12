@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
 """Append a bullet entry to today's section of the current chronicle file.
 
-The chronicle file lives at ~/proj/notes/notes/chronicles/<year>-q<quarter>.md
-and is organized as:
+The chronicle file lives at <root>/<year>-q<quarter>.md and is organized as:
 
     # 2026 Q3
     ## August
     ### 2026-08-12, Wednesday
     - entry one
     - entry two
+
+The root directory is read, in order of precedence, from the CHRONICLE_ROOT_DIR
+environment variable, then the `root_dir` setting of a config file (by default
+~/.config/chronicle/chronicle.conf, overridable with --config). If neither is
+set, the tool interactively offers to write the root directory to the default
+config file location.
 """
 
 import argparse
+import configparser
 import datetime
+import os
 import sys
 from pathlib import Path
 
-CHRONICLE_DIR = Path("~/proj/notes/notes/chronicles").expanduser()
+ENV_VAR = "CHRONICLE_ROOT_DIR"
+DEFAULT_CONFIG_PATH = Path("~/.config/chronicle/chronicle.conf").expanduser()
+CONFIG_SECTION = "chronicle"
+CONFIG_KEY = "root_dir"
 
 
 def quarter_of(date: datetime.date) -> int:
@@ -24,9 +34,9 @@ def quarter_of(date: datetime.date) -> int:
     return (date.month - 1) // 3 + 1
 
 
-def chronicle_path(date: datetime.date) -> Path:
+def chronicle_path(date: datetime.date, chronicle_dir: Path) -> Path:
     """Path of the quarterly chronicle file that `date` belongs to."""
-    return CHRONICLE_DIR / f"{date.year}-q{quarter_of(date)}.md"
+    return chronicle_dir / f"{date.year}-q{quarter_of(date)}.md"
 
 
 def find_month_header(lines: list[str], month_header: str) -> int | None:
@@ -73,6 +83,69 @@ def insert_in_section(lines: list[str], start: int, bullet: str) -> None:
     lines.insert(i, bullet + "\n")
 
 
+def read_config_root_dir(config_path: Path) -> str | None:
+    """Value of `root_dir` in `config_path`, or None if unset/missing."""
+    if not config_path.exists():
+        return None
+    parser = configparser.ConfigParser()
+    parser.read(config_path)
+    return parser.get(CONFIG_SECTION, CONFIG_KEY, fallback=None)
+
+
+def write_config_root_dir(root_dir: str) -> None:
+    """Set `root_dir` in the default config file, preserving other settings."""
+    parser = configparser.ConfigParser()
+    parser.read(DEFAULT_CONFIG_PATH)
+    if not parser.has_section(CONFIG_SECTION):
+        parser.add_section(CONFIG_SECTION)
+    parser.set(CONFIG_SECTION, CONFIG_KEY, root_dir)
+    DEFAULT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with DEFAULT_CONFIG_PATH.open("w") as f:
+        parser.write(f)
+
+
+def prompt_for_root_dir() -> Path:
+    """Interactively ask for a root directory and persist it to the default
+    config file. Exits the process if not running interactively or if the
+    answer is blank.
+    """
+    if not sys.stdin.isatty():
+        print(
+            f"chronicle: no root directory configured; set {ENV_VAR} or "
+            f"'{CONFIG_KEY}' under [{CONFIG_SECTION}] in {DEFAULT_CONFIG_PATH}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    answer = input(
+        f"chronicle: no root directory configured. Enter one to save to "
+        f"{DEFAULT_CONFIG_PATH}: "
+    ).strip()
+    if not answer:
+        print("chronicle: no root directory given", file=sys.stderr)
+        raise SystemExit(1)
+
+    write_config_root_dir(answer)
+    return Path(answer).expanduser()
+
+
+def resolve_chronicle_dir(config_path: Path, config_path_is_explicit: bool) -> Path:
+    """Root directory for chronicle files, per the documented precedence."""
+    env_value = os.environ.get(ENV_VAR)
+    if env_value:
+        return Path(env_value).expanduser()
+
+    if config_path_is_explicit and not config_path.exists():
+        print(f"chronicle: config file not found: {config_path}", file=sys.stderr)
+        raise SystemExit(1)
+
+    config_value = read_config_root_dir(config_path)
+    if config_value:
+        return Path(config_value).expanduser()
+
+    return prompt_for_root_dir()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="chronicle",
@@ -80,6 +153,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "entry", nargs="+", help="entry text; multiple words are joined with spaces"
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"config file path (default: {DEFAULT_CONFIG_PATH})",
     )
     return parser.parse_args()
 
@@ -92,8 +172,12 @@ def main() -> int:
         print("chronicle: entry text is empty", file=sys.stderr)
         return 1
 
+    config_path_is_explicit = args.config is not None
+    config_path = args.config.expanduser() if args.config else DEFAULT_CONFIG_PATH
+    chronicle_dir = resolve_chronicle_dir(config_path, config_path_is_explicit)
+
     today = datetime.date.today()
-    path = chronicle_path(today)
+    path = chronicle_path(today, chronicle_dir)
     month_header = f"## {today.strftime('%B')}"
     day_header = f"### {today.isoformat()}, {today.strftime('%A')}"
     bullet = f"- {entry}"
