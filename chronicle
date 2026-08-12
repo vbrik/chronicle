@@ -10,6 +10,8 @@ and is organized as:
     - entry one
     - entry two
 """
+
+import argparse
 import datetime
 import sys
 from pathlib import Path
@@ -71,11 +73,23 @@ def insert_in_section(lines: list[str], start: int, bullet: str) -> None:
     lines.insert(i, bullet + "\n")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="chronicle",
+        description="Append a bullet entry to today's section of the current chronicle file.",
+    )
+    parser.add_argument(
+        "entry", nargs="+", help="entry text; multiple words are joined with spaces"
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
-    entry = " ".join(sys.argv[1:]).strip()
+    args = parse_args()
+    entry = " ".join(args.entry).strip()
     entry = " ".join(entry.split("\n"))
     if not entry:
-        print("usage: chronicle <entry text>", file=sys.stderr)
+        print("chronicle: entry text is empty", file=sys.stderr)
         return 1
 
     today = datetime.date.today()

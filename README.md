@@ -11,7 +11,7 @@ chronicle <entry text>
 
 Appends `- <entry text>` under today's date heading in the current
 quarter's journal file, creating the quarter file, month heading, and/or
-day heading as needed.
+day heading as needed. Run `chronicle -h` for full usage.
 
 Example:
 
