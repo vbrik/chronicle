@@ -16,5 +16,7 @@
 - Use best practices of the programming language you are using
 
 # Testing
-- Add unit tests for new functionality
+- Add unit tests for new or changed functionality
+- If makes sense, add unit tests when the way of how components interact changes
 - Run unit tests to check your work
+- Test corner conditions
