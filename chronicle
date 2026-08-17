@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""Append a bullet entry to today's section of the current chronicle file.
+"""Append an entry to today's section of the current chronicle file.
+
+The entry text is gathered by opening $EDITOR on a temporary file; when the
+editor exits, the (non-empty) file contents become today's entry. Trailing
+whitespace is stripped from every line, then leading and trailing newlines are
+removed; the result is appended verbatim (the user is responsible for any
+markdown formatting).
 
 The chronicle file lives at <root>/<year>-q<quarter>.md and is organized as:
 
     # 2026 Q3
     ## August
     ### 2026-08-12, Wednesday
-    - entry one
-    - entry two
+    entry one
+    entry two
 
 The root directory is read, in order of precedence, from the CHRONICLE_ROOT_DIR
 environment variable, then the `root_dir` setting of a config file (by default
@@ -20,7 +26,10 @@ import argparse
 import configparser
 import datetime
 import os
+import shlex
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ENV_VAR = "CHRONICLE_ROOT_DIR"
@@ -74,13 +83,13 @@ def section_end(lines: list[str], start: int) -> int:
     return len(lines)
 
 
-def insert_in_section(lines: list[str], start: int, bullet: str) -> None:
-    """Insert `bullet` as the last entry of the section starting at `start`."""
+def insert_in_section(lines: list[str], start: int, entry: str) -> None:
+    """Insert `entry` as the last line of the section starting at `start`."""
     end = section_end(lines, start)
     i = end
     while i > start + 1 and lines[i - 1].strip() == "":
         i -= 1
-    lines.insert(i, bullet + "\n")
+    lines.insert(i, entry + "\n")
 
 
 def load_config_parser(config_path: Path) -> configparser.ConfigParser:
@@ -153,13 +162,36 @@ def resolve_chronicle_dir(config_path: Path, config_path_is_explicit: bool) -> P
     return prompt_for_root_dir(config_path)
 
 
+def edit_entry() -> str:
+    """Open $EDITOR on a temporary file and return its contents on exit.
+
+    Falls back to `vi` when $EDITOR is unset. Returns the raw file contents;
+    callers are responsible for stripping/validating.
+    """
+    editor = os.environ.get("EDITOR") or "vi"
+    cmd = shlex.split(editor)
+    # NamedTemporaryFile with delete=False so we can reopen after the editor
+    # closes it; we clean up ourselves in finally.
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".md", delete=False, encoding="utf-8"
+    ) as tf:
+        path = tf.name
+    try:
+        cmd.append(path)
+        subprocess.run(cmd, check=True)
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    finally:
+        os.unlink(path)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="chronicle",
-        description="Append a bullet entry to today's section of the current chronicle file.",
-    )
-    parser.add_argument(
-        "entry", nargs="+", help="entry text; multiple words are joined with spaces"
+        description=(
+            "Append an entry to today's section of the current chronicle "
+            "file. The entry is composed in $EDITOR (defaulting to vi)."
+        ),
     )
     parser.add_argument(
         "--config",
@@ -171,13 +203,25 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def format_entry(content: str) -> str:
+    """Normalize raw editor content before appending.
+
+    Trailing whitespace is stripped from every line, then leading and
+    trailing newlines are removed. The user is responsible for any
+    markdown formatting; chronicle just appends the text verbatim.
+    """
+    content = "\n".join(line.rstrip() for line in content.split("\n"))
+    return content.strip("\n")
+
+
 def main() -> int:
     args = parse_args()
-    entry = " ".join(args.entry).strip()
-    entry = " ".join(entry.split("\n"))
-    if not entry:
-        print("chronicle: entry text is empty", file=sys.stderr)
-        return 1
+
+    raw = edit_entry()
+    entry = format_entry(raw)
+    if not entry.strip():
+        # Empty temp file: nothing to log, not an error.
+        return 0
 
     config_path_is_explicit = args.config is not None
     config_path = args.config.expanduser() if args.config else DEFAULT_CONFIG_PATH
@@ -187,7 +231,6 @@ def main() -> int:
     path = chronicle_path(today, chronicle_dir)
     month_header = f"## {today.strftime('%B')}"
     day_header = f"### {today.isoformat()}, {today.strftime('%A')}"
-    bullet = f"- {entry}"
 
     if path.exists():
         lines = path.read_text().splitlines(keepends=True)
@@ -199,7 +242,7 @@ def main() -> int:
 
     day_idx = find_day_header(lines, today.isoformat())
     if day_idx is not None:
-        insert_in_section(lines, day_idx, bullet)
+        insert_in_section(lines, day_idx, entry)
     else:
         # Month heading, if newly created, directly follows prior content
         # (no blank line); the day heading always gets one blank line
@@ -208,10 +251,10 @@ def main() -> int:
             lines.append(month_header + "\n")
         lines.append("\n")
         lines.append(day_header + "\n")
-        lines.append(bullet + "\n")
+        lines.append(entry + "\n")
 
     path.write_text("".join(lines))
-    print(bullet)
+    print(entry)
     return 0
 
 

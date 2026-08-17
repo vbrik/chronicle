@@ -6,17 +6,23 @@ by year, quarter, month, and day.
 ## Usage
 
 ```
-chronicle <entry text>
+chronicle
 ```
 
-Appends `- <entry text>` under today's date heading in the current
-quarter's journal file, creating the quarter file, month heading, and/or
-day heading as needed. Run `chronicle -h` for full usage.
+`chronicle` opens `$EDITOR` (defaulting to `vi`) on a temporary file. When the
+editor exits, the file contents — with trailing whitespace stripped from every
+line and leading and trailing newlines removed — become today's entry. Internal
+newlines are preserved verbatim. An empty temp file means nothing is logged.
+
+The entry is appended under today's date heading in the current quarter's
+journal file, creating the quarter file, month heading, and/or day heading as
+needed.
 
 Example:
 
 ```
-$ chronicle cephs is broken again
+$ chronicle
+# (your $EDITOR opens; you type "- cephs is broken again" and save)
 - cephs is broken again
 ```
 
@@ -25,6 +31,7 @@ This produces (and extends) a file structured like:
 ```markdown
 # 2026 Q3
 ## August
+
 ### 2026-08-12, Wednesday
 - cephs is broken again
 ```

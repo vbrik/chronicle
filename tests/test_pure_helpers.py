@@ -190,3 +190,20 @@ def test_insert_in_section_last_section_in_file():
     lines = ["### 2026-08-12, Wednesday\n", "- a\n", "\n"]
     chronicle.insert_in_section(lines, 0, "- b")
     assert lines == ["### 2026-08-12, Wednesday\n", "- a\n", "- b\n", "\n"]
+
+
+def test_format_entry_single_line():
+    assert chronicle.format_entry("hello world") == "hello world"
+
+
+def test_format_entry_strips_leading_and_trailing_newlines():
+    assert chronicle.format_entry("\n\nhello\n\n") == "hello"
+
+
+def test_format_entry_strips_trailing_whitespace_per_line():
+    assert chronicle.format_entry("hello   \n  world  \n") == ("hello\n  world")
+
+
+def test_format_entry_strips_outer_newlines_keeps_inner():
+    content = "\n\nfirst\nsecond\n\n"
+    assert chronicle.format_entry(content) == "first\nsecond"
