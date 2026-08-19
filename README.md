@@ -9,10 +9,14 @@ by year, quarter, month, and day.
 chronicle
 ```
 
-`chronicle` opens `$EDITOR` (defaulting to `vi`) on a temporary file. When the
-editor exits, the file contents — with trailing whitespace stripped from every
-line and leading and trailing newlines removed — become today's entry. Internal
-newlines are preserved verbatim. An empty temp file means nothing is logged.
+`chronicle` opens `$EDITOR` (defaulting to `vi`) on a temporary file prefilled
+with `- `. For `vim`/`nvim` specifically, it also opens straight into insert
+mode positioned right after the prefill; other editors are left to their
+normal startup behavior. When the editor exits, the file contents — with
+trailing whitespace stripped from every line and leading and trailing
+newlines removed — become today's entry. Internal newlines are preserved
+verbatim. Leaving the temp file empty, or unchanged from its `- ` prefill,
+means nothing is logged.
 
 The entry is appended under today's date heading in the current quarter's
 journal file, creating the quarter file, month heading, and/or day heading as

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Append an entry to today's section of the current chronicle file.
 
-The entry text is gathered by opening $EDITOR on a temporary file; when the
-editor exits, the (non-empty) file contents become today's entry. Trailing
-whitespace is stripped from every line, then leading and trailing newlines are
-removed; the result is appended verbatim (the user is responsible for any
-markdown formatting).
+The entry text is gathered by opening $EDITOR on a temporary file prefilled
+with "- " (for vim/nvim, the editor is also dropped straight into insert
+mode after the prefill); when the editor exits, the file contents become
+today's entry, unless they're blank or unchanged from the "- " prefill, in
+which case nothing is logged. Trailing whitespace is stripped from every
+line, then leading and trailing newlines are removed; the result is
+appended verbatim.
 
 The chronicle file lives at <root>/<year>-q<quarter>.md and is organized as:
 
@@ -162,19 +164,53 @@ def resolve_chronicle_dir(config_path: Path, config_path_is_explicit: bool) -> P
     return prompt_for_root_dir(config_path)
 
 
-def edit_entry() -> str:
-    """Open $EDITOR on a temporary file and return its contents on exit.
+_CURSOR_FLAGS_BY_EDITOR = {
+    "vim": ["-c", "startinsert!"],
+    "nvim": ["-c", "startinsert!"],
+}
 
-    Falls back to `vi` when $EDITOR is unset. Returns the raw file contents;
-    callers are responsible for stripping/validating.
+
+def cursor_flags(editor_argv: list[str]) -> list[str]:
+    """Extra argv flags that place the cursor right after the "- " prefill,
+    for editors whose command-line syntax for this is known and safe.
+
+    Matched by executable basename. Only vim/nvim are recognized: an
+    unrecognized or wrong flag risks being parsed as a second filename
+    instead of an option, which would silently edit a different buffer and
+    leave the "- "-only temp file looking unmodified (see `is_blank_entry`)
+    — i.e. the entry gets silently dropped. Plain "vi" is deliberately
+    excluded since its traditional ex-command set lacks `:startinsert`.
+    """
+    if not editor_argv:
+        return []
+    exe = Path(editor_argv[0]).name
+    return list(_CURSOR_FLAGS_BY_EDITOR.get(exe, []))
+
+
+def edit_entry() -> str:
+    """Open $EDITOR on a temporary file, prefilled with "- ", and return its
+    contents on exit.
+
+    Falls back to `vi` when $EDITOR is unset. For vim/nvim, extra flags are
+    added (see `cursor_flags`) so the editor opens in insert mode right
+    after the prefill; other editors are left untouched. Returns the raw
+    file contents, "- " prefix included; callers are responsible for
+    stripping/validating (see `is_blank_entry` for detecting an unchanged
+    prefill).
     """
     editor = os.environ.get("EDITOR") or "vi"
     cmd = shlex.split(editor)
+    # Inserted right after the executable, not appended last: a trailing
+    # user-supplied "--" would otherwise end option parsing and make vim
+    # treat these flags as filenames instead.
+    cmd[1:1] = cursor_flags(cmd)
     # NamedTemporaryFile with delete=False so we can reopen after the editor
-    # closes it; we clean up ourselves in finally.
+    # closes it; we clean up ourselves in finally. Prefilled with "- " since
+    # entries are conventionally markdown bullets.
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".md", delete=False, encoding="utf-8"
     ) as tf:
+        tf.write("- ")
         path = tf.name
     try:
         cmd.append(path)
@@ -207,11 +243,20 @@ def format_entry(content: str) -> str:
     """Normalize raw editor content before appending.
 
     Trailing whitespace is stripped from every line, then leading and
-    trailing newlines are removed. The user is responsible for any
-    markdown formatting; chronicle just appends the text verbatim.
+    trailing newlines are removed. Beyond that, chronicle appends the text
+    verbatim, "- " prefill included if the user built on it.
     """
     content = "\n".join(line.rstrip() for line in content.split("\n"))
     return content.strip("\n")
+
+
+def is_blank_entry(entry: str) -> bool:
+    """True if `entry` (already run through `format_entry`) has no real content.
+
+    Covers both a fully empty/whitespace-only entry and the unmodified "-"
+    bullet prefill left behind when the editor is closed without adding text.
+    """
+    return entry.strip() in ("", "-")
 
 
 def main() -> int:
@@ -219,8 +264,8 @@ def main() -> int:
 
     raw = edit_entry()
     entry = format_entry(raw)
-    if not entry.strip():
-        # Empty temp file: nothing to log, not an error.
+    if is_blank_entry(entry):
+        # Nothing meaningful was entered: nothing to log, not an error.
         return 0
 
     config_path_is_explicit = args.config is not None

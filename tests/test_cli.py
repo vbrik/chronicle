@@ -135,6 +135,48 @@ def test_main_whitespace_only_editor_content_no_op(
     assert not (root / "2026-q3.md").exists()
 
 
+def test_main_dash_prefill_with_added_text(monkeypatch, tmp_path, freeze_date):
+    freeze_date(2026, 8, 12)
+    root = tmp_path / "journal"
+    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+
+    rc = _run_main(monkeypatch, [], editor_content="- cephs is broken again")
+
+    assert rc == 0
+    assert (root / "2026-q3.md").read_text() == (
+        "# 2026 Q3\n## August\n\n### 2026-08-12, Wednesday\n- cephs is broken again\n"
+    )
+
+
+def test_main_dash_prefill_with_trailing_newline_from_real_editor(
+    monkeypatch, tmp_path, freeze_date
+):
+    # A real editor writes a trailing newline on save, unlike the bare
+    # strings used elsewhere in this suite.
+    freeze_date(2026, 8, 12)
+    root = tmp_path / "journal"
+    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+
+    rc = _run_main(monkeypatch, [], editor_content="- typed\n")
+
+    assert rc == 0
+    assert (root / "2026-q3.md").read_text() == (
+        "# 2026 Q3\n## August\n\n### 2026-08-12, Wednesday\n- typed\n"
+    )
+
+
+def test_main_unmodified_dash_prefill_no_op(monkeypatch, tmp_path, freeze_date, capsys):
+    freeze_date(2026, 8, 12)
+    root = tmp_path / "journal"
+    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+
+    rc = _run_main(monkeypatch, [], editor_content="- ")
+
+    assert rc == 0
+    assert not (root / "2026-q3.md").exists()
+    assert capsys.readouterr().out == ""
+
+
 def test_main_strips_leading_and_trailing_newlines(monkeypatch, tmp_path, freeze_date):
     freeze_date(2026, 8, 12)
     root = tmp_path / "journal"
@@ -231,6 +273,73 @@ def test_edit_editor_with_args(monkeypatch, tmp_path):
     chronicle.edit_entry()
 
     assert captured["cmd"] == [str(editor), "--flag", "--wait", captured["cmd"][-1]]
+
+
+def test_edit_entry_prefills_temp_file_with_dash(monkeypatch):
+    monkeypatch.delenv("EDITOR", raising=False)
+    captured = {}
+
+    def fake_run(cmd, check):
+        with open(cmd[-1], encoding="utf-8") as f:
+            captured["initial"] = f.read()
+        with open(cmd[-1], "w") as f:
+            f.write("ok")
+
+    monkeypatch.setattr(chronicle.subprocess, "run", fake_run)
+    chronicle.edit_entry()
+
+    assert captured["initial"] == "- "
+
+
+def test_edit_entry_adds_cursor_flags_for_vim(monkeypatch):
+    monkeypatch.setenv("EDITOR", "vim")
+    captured = {}
+
+    def fake_run(cmd, check):
+        captured["cmd"] = cmd
+        with open(cmd[-1], "w") as f:
+            f.write("- typed\n")
+
+    monkeypatch.setattr(chronicle.subprocess, "run", fake_run)
+    chronicle.edit_entry()
+
+    assert captured["cmd"][:-1] == ["vim", "-c", "startinsert!"]
+
+
+def test_edit_entry_cursor_flags_precede_user_supplied_args(monkeypatch):
+    # EDITOR values ending in an option terminator like "--" would make vim
+    # treat flags appended after it as filenames instead of options; cursor
+    # flags must be inserted right after the executable, not appended last.
+    monkeypatch.setenv("EDITOR", "vim --")
+    captured = {}
+
+    def fake_run(cmd, check):
+        captured["cmd"] = cmd
+        with open(cmd[-1], "w") as f:
+            f.write("ok")
+
+    monkeypatch.setattr(chronicle.subprocess, "run", fake_run)
+    chronicle.edit_entry()
+
+    assert captured["cmd"] == ["vim", "-c", "startinsert!", "--", captured["cmd"][-1]]
+
+
+def test_edit_entry_no_cursor_flags_for_unrecognized_editor(monkeypatch, tmp_path):
+    editor = tmp_path / "editor.sh"
+    editor.write_text('#!/bin/sh\necho x > "$1"\n')
+    editor.chmod(0o755)
+    monkeypatch.setenv("EDITOR", str(editor))
+    captured = {}
+
+    def fake_run(cmd, check):
+        captured["cmd"] = cmd
+        with open(cmd[-1], "w") as f:
+            f.write("ok")
+
+    monkeypatch.setattr(chronicle.subprocess, "run", fake_run)
+    chronicle.edit_entry()
+
+    assert captured["cmd"] == [str(editor), captured["cmd"][-1]]
 
 
 def test_edit_entry_cleans_up_temp_file(monkeypatch):

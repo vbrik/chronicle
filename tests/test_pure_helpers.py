@@ -207,3 +207,55 @@ def test_format_entry_strips_trailing_whitespace_per_line():
 def test_format_entry_strips_outer_newlines_keeps_inner():
     content = "\n\nfirst\nsecond\n\n"
     assert chronicle.format_entry(content) == "first\nsecond"
+
+
+def test_is_blank_entry_empty_string():
+    assert chronicle.is_blank_entry("") is True
+
+
+def test_is_blank_entry_whitespace_only():
+    assert chronicle.is_blank_entry("   ") is True
+
+
+def test_is_blank_entry_unmodified_dash_prefill():
+    assert chronicle.is_blank_entry("-") is True
+
+
+def test_is_blank_entry_dash_with_content_is_not_blank():
+    assert chronicle.is_blank_entry("- did something") is False
+
+
+def test_cursor_flags_vim_enters_insert_mode_at_end_of_line():
+    assert chronicle.cursor_flags(["vim"]) == ["-c", "startinsert!"]
+
+
+def test_cursor_flags_nvim_same_as_vim():
+    assert chronicle.cursor_flags(["nvim"]) == ["-c", "startinsert!"]
+
+
+def test_cursor_flags_unknown_editor_returns_nothing():
+    assert chronicle.cursor_flags(["code", "--wait"]) == []
+
+
+def test_cursor_flags_emacs_not_recognized():
+    # Not verified against a real emacs; deliberately left unhandled rather
+    # than guessed (a wrong flag risks being parsed as a second filename).
+    assert chronicle.cursor_flags(["emacs"]) == []
+
+
+def test_cursor_flags_nano_not_recognized():
+    assert chronicle.cursor_flags(["nano"]) == []
+
+
+def test_cursor_flags_plain_vi_returns_nothing():
+    # Plain "vi" may be nvi/BSD vi, which lacks vim's :startinsert command;
+    # only vim/nvim get cursor flags.
+    assert chronicle.cursor_flags(["vi"]) == []
+
+
+def test_cursor_flags_matches_by_basename_not_full_path():
+    assert chronicle.cursor_flags(["/usr/bin/vim"]) == ["-c", "startinsert!"]
+
+
+def test_cursor_flags_empty_argv_returns_nothing():
+    assert chronicle.cursor_flags([]) == []
