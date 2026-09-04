@@ -6,10 +6,22 @@ import chronicle
 import pytest
 
 
+def _configure_target(target_path, key="0"):
+    """Point the (test-isolated) default config file's target `key` at `target_path`."""
+    chronicle.DEFAULT_CONFIG_PATH.write_text(f"[targets]\n{key} = {target_path}\n")
+
+
 def test_parse_args_no_positional(monkeypatch):
     monkeypatch.setattr(chronicle.sys, "argv", ["chronicle"])
     args = chronicle.parse_args()
+    assert args.target is None
     assert args.config is None
+
+
+def test_parse_args_explicit_target(monkeypatch):
+    monkeypatch.setattr(chronicle.sys, "argv", ["chronicle", "1"])
+    args = chronicle.parse_args()
+    assert args.target == "1"
 
 
 def test_parse_args_explicit_config(monkeypatch):
@@ -28,59 +40,49 @@ def test_parse_args_help(monkeypatch, capsys):
 
 def _run_main(monkeypatch, argv, editor_content="my entry"):
     """Run main() with a mocked editor returning `editor_content`."""
-    monkeypatch.setattr(chronicle, "edit_entry", lambda: editor_content)
+    monkeypatch.setattr(chronicle, "edit_entry", lambda path: editor_content)
     monkeypatch.setattr(chronicle.sys, "argv", ["chronicle", *argv])
     return chronicle.main()
 
 
 def test_main_creates_new_file(monkeypatch, tmp_path, freeze_date, capsys):
     freeze_date(2026, 8, 12)  # a Wednesday
-    root = tmp_path / "journal"
-    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+    target_file = tmp_path / "journal" / "target.md"
+    _configure_target(target_file)
 
     rc = _run_main(monkeypatch, [], editor_content="my entry")
 
     assert rc == 0
-    quarter_file = root / "2026-q3.md"
-    assert quarter_file.read_text() == (
-        "# 2026 Q3\n## August\n\n### 2026-08-12, Wednesday\nmy entry\n"
+    assert target_file.read_text() == (
+        "## August\n\n### 2026-08-12, Wednesday\nmy entry\n"
     )
     assert capsys.readouterr().out == "my entry\n"
 
 
 def test_main_appends_to_existing_today_section(monkeypatch, tmp_path, freeze_date):
     freeze_date(2026, 8, 12)
-    root = tmp_path / "journal"
-    root.mkdir()
-    quarter_file = root / "2026-q3.md"
-    quarter_file.write_text(
-        "# 2026 Q3\n## August\n\n### 2026-08-12, Wednesday\nfirst entry\n"
-    )
-    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+    target_file = tmp_path / "target.md"
+    target_file.write_text("## August\n\n### 2026-08-12, Wednesday\nfirst entry\n")
+    _configure_target(target_file)
 
     rc = _run_main(monkeypatch, [], editor_content="second entry")
 
     assert rc == 0
-    assert quarter_file.read_text() == (
-        "# 2026 Q3\n## August\n\n### 2026-08-12, Wednesday\nfirst entry\nsecond entry\n"
+    assert target_file.read_text() == (
+        "## August\n\n### 2026-08-12, Wednesday\nfirst entry\nsecond entry\n"
     )
 
 
 def test_main_existing_month_new_day(monkeypatch, tmp_path, freeze_date):
     freeze_date(2026, 8, 12)
-    root = tmp_path / "journal"
-    root.mkdir()
-    quarter_file = root / "2026-q3.md"
-    quarter_file.write_text(
-        "# 2026 Q3\n## August\n\n### 2026-08-11, Tuesday\nyesterday\n"
-    )
-    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+    target_file = tmp_path / "target.md"
+    target_file.write_text("## August\n\n### 2026-08-11, Tuesday\nyesterday\n")
+    _configure_target(target_file)
 
     rc = _run_main(monkeypatch, [], editor_content="today's entry")
 
     assert rc == 0
-    assert quarter_file.read_text() == (
-        "# 2026 Q3\n"
+    assert target_file.read_text() == (
         "## August\n"
         "\n"
         "### 2026-08-11, Tuesday\n"
@@ -90,35 +92,31 @@ def test_main_existing_month_new_day(monkeypatch, tmp_path, freeze_date):
         "today's entry\n"
     )
     # Month heading is not duplicated.
-    assert quarter_file.read_text().count("## August") == 1
+    assert target_file.read_text().count("## August") == 1
 
 
 def test_main_trims_trailing_blank_lines(monkeypatch, tmp_path, freeze_date):
     freeze_date(2026, 8, 12)
-    root = tmp_path / "journal"
-    root.mkdir()
-    quarter_file = root / "2026-q3.md"
-    quarter_file.write_text(
-        "# 2026 Q3\n## August\n\n### 2026-08-11, Tuesday\nyesterday\n\n\n\n"
-    )
-    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+    target_file = tmp_path / "target.md"
+    target_file.write_text("## August\n\n### 2026-08-11, Tuesday\nyesterday\n\n\n\n")
+    _configure_target(target_file)
 
     rc = _run_main(monkeypatch, [], editor_content="today's entry")
 
     assert rc == 0
-    content = quarter_file.read_text()
+    content = target_file.read_text()
     assert "\n\n\n" not in content
 
 
 def test_main_empty_editor_content_no_op(monkeypatch, tmp_path, freeze_date, capsys):
     freeze_date(2026, 8, 12)
-    root = tmp_path / "journal"
-    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+    target_file = tmp_path / "target.md"
+    _configure_target(target_file)
 
     rc = _run_main(monkeypatch, [], editor_content="")
 
     assert rc == 0
-    assert not (root / "2026-q3.md").exists()
+    assert not target_file.exists()
     assert capsys.readouterr().out == ""
 
 
@@ -126,25 +124,25 @@ def test_main_whitespace_only_editor_content_no_op(
     monkeypatch, tmp_path, freeze_date, capsys
 ):
     freeze_date(2026, 8, 12)
-    root = tmp_path / "journal"
-    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+    target_file = tmp_path / "target.md"
+    _configure_target(target_file)
 
     rc = _run_main(monkeypatch, [], editor_content="   \n  \n")
 
     assert rc == 0
-    assert not (root / "2026-q3.md").exists()
+    assert not target_file.exists()
 
 
 def test_main_dash_prefill_with_added_text(monkeypatch, tmp_path, freeze_date):
     freeze_date(2026, 8, 12)
-    root = tmp_path / "journal"
-    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+    target_file = tmp_path / "target.md"
+    _configure_target(target_file)
 
     rc = _run_main(monkeypatch, [], editor_content="- cephs is broken again")
 
     assert rc == 0
-    assert (root / "2026-q3.md").read_text() == (
-        "# 2026 Q3\n## August\n\n### 2026-08-12, Wednesday\n- cephs is broken again\n"
+    assert target_file.read_text() == (
+        "## August\n\n### 2026-08-12, Wednesday\n- cephs is broken again\n"
     )
 
 
@@ -154,49 +152,65 @@ def test_main_dash_prefill_with_trailing_newline_from_real_editor(
     # A real editor writes a trailing newline on save, unlike the bare
     # strings used elsewhere in this suite.
     freeze_date(2026, 8, 12)
-    root = tmp_path / "journal"
-    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+    target_file = tmp_path / "target.md"
+    _configure_target(target_file)
 
     rc = _run_main(monkeypatch, [], editor_content="- typed\n")
 
     assert rc == 0
-    assert (root / "2026-q3.md").read_text() == (
-        "# 2026 Q3\n## August\n\n### 2026-08-12, Wednesday\n- typed\n"
+    assert target_file.read_text() == (
+        "## August\n\n### 2026-08-12, Wednesday\n- typed\n"
     )
 
 
 def test_main_unmodified_dash_prefill_no_op(monkeypatch, tmp_path, freeze_date, capsys):
     freeze_date(2026, 8, 12)
-    root = tmp_path / "journal"
-    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+    target_file = tmp_path / "target.md"
+    _configure_target(target_file)
 
     rc = _run_main(monkeypatch, [], editor_content="- ")
 
     assert rc == 0
-    assert not (root / "2026-q3.md").exists()
+    assert not target_file.exists()
+    assert capsys.readouterr().out == ""
+
+
+def test_main_unmodified_header_and_dash_prefill_no_op(
+    monkeypatch, tmp_path, freeze_date, capsys
+):
+    # The actual raw shape produced by a quit-without-editing: the
+    # sanity-check header line still intact, followed by the "- " prefill.
+    freeze_date(2026, 8, 12)
+    target_file = tmp_path / "target.md"
+    _configure_target(target_file)
+
+    rc = _run_main(monkeypatch, [], editor_content=f"# {target_file.resolve()}\n- ")
+
+    assert rc == 0
+    assert not target_file.exists()
     assert capsys.readouterr().out == ""
 
 
 def test_main_strips_leading_and_trailing_newlines(monkeypatch, tmp_path, freeze_date):
     freeze_date(2026, 8, 12)
-    root = tmp_path / "journal"
-    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+    target_file = tmp_path / "target.md"
+    _configure_target(target_file)
 
     rc = _run_main(monkeypatch, [], editor_content="\n\nhello world\n\n")
 
     assert rc == 0
-    assert "hello world\n" in (root / "2026-q3.md").read_text()
+    assert "hello world\n" in target_file.read_text()
 
 
 def test_main_multiline_content_preserved_verbatim(monkeypatch, tmp_path, freeze_date):
     freeze_date(2026, 8, 12)
-    root = tmp_path / "journal"
-    monkeypatch.setenv(chronicle.ENV_VAR, str(root))
+    target_file = tmp_path / "target.md"
+    _configure_target(target_file)
 
     rc = _run_main(monkeypatch, [], editor_content="first line\nsecond line\nthird")
 
     assert rc == 0
-    content = (root / "2026-q3.md").read_text()
+    content = target_file.read_text()
     assert "first line\nsecond line\nthird\n" in content
 
 
@@ -208,16 +222,132 @@ def test_main_explicit_config_missing_file_raises(monkeypatch, tmp_path, freeze_
         _run_main(monkeypatch, ["--config", str(missing_config)], editor_content="x")
 
 
-def test_main_config_file_driven_root_dir(monkeypatch, tmp_path, freeze_date):
+def test_main_explicit_config_flag(monkeypatch, tmp_path, freeze_date):
     freeze_date(2026, 8, 12)
-    root = tmp_path / "journal"
+    target_file = tmp_path / "target.md"
     config_path = tmp_path / "chronicle.conf"
-    config_path.write_text(f"[chronicle]\nroot_dir = {root}\n")
+    config_path.write_text(f"[targets]\n0 = {target_file}\n")
 
     rc = _run_main(monkeypatch, ["--config", str(config_path)], editor_content="entry")
 
     assert rc == 0
-    assert (root / "2026-q3.md").exists()
+    assert target_file.exists()
+
+
+def test_main_explicit_config_and_target_together(monkeypatch, tmp_path, freeze_date):
+    freeze_date(2026, 8, 12)
+    target0 = tmp_path / "target0.md"
+    target1 = tmp_path / "target1.md"
+    config_path = tmp_path / "chronicle.conf"
+    config_path.write_text(f"[targets]\n0 = {target0}\n1 = {target1}\n")
+
+    rc = _run_main(
+        monkeypatch, ["--config", str(config_path), "1"], editor_content="entry"
+    )
+
+    assert rc == 0
+    assert not target0.exists()
+    assert target1.exists()
+
+
+def test_main_selects_target_by_key(monkeypatch, tmp_path, freeze_date):
+    freeze_date(2026, 8, 12)
+    target0 = tmp_path / "target0.md"
+    target1 = tmp_path / "target1.md"
+    chronicle.DEFAULT_CONFIG_PATH.write_text(
+        f"[targets]\n0 = {target0}\n1 = {target1}\n"
+    )
+
+    rc = _run_main(monkeypatch, ["1"], editor_content="entry for one")
+
+    assert rc == 0
+    assert not target0.exists()
+    assert target1.read_text() == (
+        "## August\n\n### 2026-08-12, Wednesday\nentry for one\n"
+    )
+
+
+def test_main_default_uses_first_configured_target(monkeypatch, tmp_path, freeze_date):
+    freeze_date(2026, 8, 12)
+    first = tmp_path / "first.md"
+    second = tmp_path / "second.md"
+    # Deliberately out-of-numeric-order keys: "first entry" means file order.
+    chronicle.DEFAULT_CONFIG_PATH.write_text(f"[targets]\n1 = {first}\n0 = {second}\n")
+
+    rc = _run_main(monkeypatch, [], editor_content="entry")
+
+    assert rc == 0
+    assert first.exists()
+    assert not second.exists()
+
+
+def test_main_repeated_month_name_across_years_gets_own_heading(
+    monkeypatch, tmp_path, freeze_date
+):
+    # A long-lived target file (no per-quarter rollover) can revisit a
+    # month name. Today's month heading must not be skipped just because
+    # the same name appears earlier in the file for a different year.
+    freeze_date(2027, 9, 4)  # a Saturday
+    target_file = tmp_path / "target.md"
+    target_file.write_text("## September\n\n### 2026-09-04, Friday\nlast year\n")
+    _configure_target(target_file)
+
+    rc = _run_main(monkeypatch, [], editor_content="this year")
+
+    assert rc == 0
+    # A newly-appended month heading directly follows prior content (no
+    # blank line); only the day heading gets one, per existing convention.
+    assert target_file.read_text() == (
+        "## September\n"
+        "\n"
+        "### 2026-09-04, Friday\n"
+        "last year\n"
+        "## September\n"
+        "\n"
+        "### 2027-09-04, Saturday\n"
+        "this year\n"
+    )
+
+
+def test_main_unknown_target_key_exits(monkeypatch, tmp_path, capsys):
+    _configure_target(tmp_path / "target.md", key="0")
+    monkeypatch.setattr(chronicle, "edit_entry", lambda path: "should not be reached")
+    monkeypatch.setattr(chronicle.sys, "argv", ["chronicle", "9"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        chronicle.main()
+
+    assert exc_info.value.code == 1
+    assert '"9"' in capsys.readouterr().err
+
+
+def test_main_strips_injected_header_line_end_to_end(
+    monkeypatch, tmp_path, freeze_date
+):
+    # Exercises the real edit_entry -> strip_target_header_line -> main
+    # pipeline (no mocked editor), confirming the sanity-check header line
+    # never ends up in the written file.
+    freeze_date(2026, 8, 12)
+    target_file = tmp_path / "target.md"
+    _configure_target(target_file)
+
+    editor = tmp_path / "editor.sh"
+    editor.write_text(
+        "#!/bin/sh\n"
+        'head -n 1 "$1" > "$1.tmp"\n'
+        'echo "- integration entry" >> "$1.tmp"\n'
+        'mv "$1.tmp" "$1"\n'
+    )
+    editor.chmod(0o755)
+    monkeypatch.setenv("EDITOR", str(editor))
+    monkeypatch.setattr(chronicle.sys, "argv", ["chronicle"])
+
+    rc = chronicle.main()
+
+    assert rc == 0
+    content = target_file.read_text()
+    assert str(target_file.resolve()) not in content
+    assert content == "## August\n\n### 2026-08-12, Wednesday\n- integration entry\n"
 
 
 def test_edit_entry_uses_env_editor(monkeypatch, tmp_path):
@@ -234,13 +364,13 @@ def test_edit_entry_uses_env_editor(monkeypatch, tmp_path):
             f.write("from editor\n")
 
     monkeypatch.setattr(chronicle.subprocess, "run", fake_run)
-    result = chronicle.edit_entry()
+    result = chronicle.edit_entry(tmp_path / "target.md")
 
     assert result == "from editor\n"
     assert captured["cmd"][0] == str(editor)
 
 
-def test_edit_entry_falls_back_to_vi_when_editor_unset(monkeypatch):
+def test_edit_entry_falls_back_to_vi_when_editor_unset(monkeypatch, tmp_path):
     monkeypatch.delenv("EDITOR", raising=False)
     captured = {}
 
@@ -250,7 +380,7 @@ def test_edit_entry_falls_back_to_vi_when_editor_unset(monkeypatch):
             f.write("vi content")
 
     monkeypatch.setattr(chronicle.subprocess, "run", fake_run)
-    result = chronicle.edit_entry()
+    result = chronicle.edit_entry(tmp_path / "target.md")
 
     assert captured["cmd"][0] == "vi"
     assert result == "vi content"
@@ -270,13 +400,16 @@ def test_edit_editor_with_args(monkeypatch, tmp_path):
             f.write("ok")
 
     monkeypatch.setattr(chronicle.subprocess, "run", fake_run)
-    chronicle.edit_entry()
+    chronicle.edit_entry(tmp_path / "target.md")
 
     assert captured["cmd"] == [str(editor), "--flag", "--wait", captured["cmd"][-1]]
 
 
-def test_edit_entry_prefills_temp_file_with_dash(monkeypatch):
+def test_edit_entry_prefills_temp_file_with_target_header_and_dash(
+    monkeypatch, tmp_path
+):
     monkeypatch.delenv("EDITOR", raising=False)
+    target = tmp_path / "target.md"
     captured = {}
 
     def fake_run(cmd, check):
@@ -286,12 +419,12 @@ def test_edit_entry_prefills_temp_file_with_dash(monkeypatch):
             f.write("ok")
 
     monkeypatch.setattr(chronicle.subprocess, "run", fake_run)
-    chronicle.edit_entry()
+    chronicle.edit_entry(target)
 
-    assert captured["initial"] == "- "
+    assert captured["initial"] == f"# {target}\n- "
 
 
-def test_edit_entry_adds_cursor_flags_for_vim(monkeypatch):
+def test_edit_entry_adds_cursor_flags_for_vim(monkeypatch, tmp_path):
     monkeypatch.setenv("EDITOR", "vim")
     captured = {}
 
@@ -301,12 +434,12 @@ def test_edit_entry_adds_cursor_flags_for_vim(monkeypatch):
             f.write("- typed\n")
 
     monkeypatch.setattr(chronicle.subprocess, "run", fake_run)
-    chronicle.edit_entry()
+    chronicle.edit_entry(tmp_path / "target.md")
 
-    assert captured["cmd"][:-1] == ["vim", "-c", "startinsert!"]
+    assert captured["cmd"][:-1] == ["vim", "-c", "$", "-c", "startinsert!"]
 
 
-def test_edit_entry_cursor_flags_precede_user_supplied_args(monkeypatch):
+def test_edit_entry_cursor_flags_precede_user_supplied_args(monkeypatch, tmp_path):
     # EDITOR values ending in an option terminator like "--" would make vim
     # treat flags appended after it as filenames instead of options; cursor
     # flags must be inserted right after the executable, not appended last.
@@ -319,9 +452,17 @@ def test_edit_entry_cursor_flags_precede_user_supplied_args(monkeypatch):
             f.write("ok")
 
     monkeypatch.setattr(chronicle.subprocess, "run", fake_run)
-    chronicle.edit_entry()
+    chronicle.edit_entry(tmp_path / "target.md")
 
-    assert captured["cmd"] == ["vim", "-c", "startinsert!", "--", captured["cmd"][-1]]
+    assert captured["cmd"] == [
+        "vim",
+        "-c",
+        "$",
+        "-c",
+        "startinsert!",
+        "--",
+        captured["cmd"][-1],
+    ]
 
 
 def test_edit_entry_no_cursor_flags_for_unrecognized_editor(monkeypatch, tmp_path):
@@ -337,12 +478,12 @@ def test_edit_entry_no_cursor_flags_for_unrecognized_editor(monkeypatch, tmp_pat
             f.write("ok")
 
     monkeypatch.setattr(chronicle.subprocess, "run", fake_run)
-    chronicle.edit_entry()
+    chronicle.edit_entry(tmp_path / "target.md")
 
     assert captured["cmd"] == [str(editor), captured["cmd"][-1]]
 
 
-def test_edit_entry_cleans_up_temp_file(monkeypatch):
+def test_edit_entry_cleans_up_temp_file(monkeypatch, tmp_path):
     monkeypatch.delenv("EDITOR", raising=False)
 
     created_paths = []
@@ -351,7 +492,7 @@ def test_edit_entry_cleans_up_temp_file(monkeypatch):
         created_paths.append(cmd[-1])
 
     monkeypatch.setattr(chronicle.subprocess, "run", fake_run)
-    chronicle.edit_entry()
+    chronicle.edit_entry(tmp_path / "target.md")
 
     import os
 

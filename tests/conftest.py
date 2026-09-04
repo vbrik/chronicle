@@ -25,16 +25,12 @@ _spec.loader.exec_module(chronicle)
 
 @pytest.fixture(autouse=True)
 def _isolate_from_real_environment(monkeypatch, tmp_path):
-    """Prevent any test from touching the developer's real config, env, or stdin.
+    """Prevent any test from touching the developer's real config.
 
-    Without this, a test that falls through to `resolve_chronicle_dir`'s
-    config-file or prompt tiers would resolve this machine's real
-    ~/.config/chronicle/chronicle.conf and read/write into the real journal
-    it points at. The stdin patch also turns an accidental fall-through to
-    `prompt_for_root_dir` into a clean SystemExit instead of a hang on
-    `input()` under `pytest -s`.
+    Without this, a test that doesn't pass an explicit --config would
+    resolve this machine's real ~/.config/chronicle/chronicle.conf and
+    read/write into whatever journal it points at.
     """
-    monkeypatch.delenv(chronicle.ENV_VAR, raising=False)
     monkeypatch.setattr(
         chronicle, "DEFAULT_CONFIG_PATH", tmp_path / "unused-default-config.conf"
     )

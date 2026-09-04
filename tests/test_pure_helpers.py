@@ -1,82 +1,46 @@
 """Tests for chronicle's pure, I/O-free helper functions."""
 
-import datetime
 from pathlib import Path
 
 import chronicle
-import pytest
 
 
-@pytest.mark.parametrize(
-    ("month", "expected_quarter"),
-    [
-        (1, 1),
-        (2, 1),
-        (3, 1),
-        (4, 2),
-        (5, 2),
-        (6, 2),
-        (7, 3),
-        (8, 3),
-        (9, 3),
-        (10, 4),
-        (11, 4),
-        (12, 4),
-    ],
-)
-def test_quarter_of(month, expected_quarter):
-    assert chronicle.quarter_of(datetime.date(2026, month, 15)) == expected_quarter
+def test_last_day_header_date_single_present():
+    lines = ["## August\n", "### 2026-08-12, Wednesday\n"]
+    assert chronicle.last_day_header_date(lines) == (2026, 8, 12)
 
 
-def test_quarter_of_leap_year_feb29():
-    assert chronicle.quarter_of(datetime.date(2024, 2, 29)) == 1
+def test_last_day_header_date_returns_last_not_first():
+    # A month name (and thus a "## <Month>" heading) can recur across
+    # years in a long-lived target file; only the day heading's full ISO
+    # date unambiguously says whether the file's last section is *this*
+    # year-month or an older one with the same name.
+    lines = [
+        "## September\n",
+        "### 2026-09-04, Friday\n",
+        "## September\n",
+        "### 2027-09-04, Saturday\n",
+    ]
+    assert chronicle.last_day_header_date(lines) == (2027, 9, 4)
 
 
-@pytest.mark.parametrize(
-    ("month", "expected_quarter"),
-    [(1, 1), (4, 2), (7, 3), (10, 4)],
-)
-def test_chronicle_path_quarter_in_filename(month, expected_quarter):
-    date = datetime.date(2026, month, 1)
-    path = chronicle.chronicle_path(date, Path("/root"))
-    assert path == Path(f"/root/2026-q{expected_quarter}.md")
+def test_last_day_header_date_ignores_month_header():
+    lines = ["## August\n"]
+    assert chronicle.last_day_header_date(lines) is None
 
 
-def test_chronicle_path_different_years_differ():
-    dir_ = Path("/root")
-    p2025 = chronicle.chronicle_path(datetime.date(2025, 1, 1), dir_)
-    p2026 = chronicle.chronicle_path(datetime.date(2026, 1, 1), dir_)
-    assert p2025 != p2026
-    assert p2025 == Path("/root/2025-q1.md")
-    assert p2026 == Path("/root/2026-q1.md")
+def test_last_day_header_date_absent():
+    lines = ["not a heading\n"]
+    assert chronicle.last_day_header_date(lines) is None
 
 
-def test_find_month_header_present():
-    lines = ["# 2026 Q3\n", "## August\n", "### 2026-08-12\n"]
-    assert chronicle.find_month_header(lines, "## August") == 1
+def test_last_day_header_date_empty_lines():
+    assert chronicle.last_day_header_date([]) is None
 
 
-def test_find_month_header_absent():
-    lines = ["# 2026 Q3\n", "## July\n"]
-    assert chronicle.find_month_header(lines, "## August") is None
-
-
-def test_find_month_header_empty_lines():
-    assert chronicle.find_month_header([], "## August") is None
-
-
-def test_find_month_header_does_not_match_day_header():
-    # Equality check, not substring: a day heading under August must not
-    # be mistaken for the "## August" month heading itself.
-    lines = ["### August 12\n"]
-    assert chronicle.find_month_header(lines, "## August") is None
-
-
-def test_find_month_header_exact_match_only():
-    # Documents current behavior: trailing whitespace on the heading line
-    # breaks the exact-equality match.
-    lines = ["## August \n"]
-    assert chronicle.find_month_header(lines, "## August") is None
+def test_last_day_header_date_ignores_weekday_suffix():
+    lines = ["### 2026-08-12, Wednesday -- planning notes\n"]
+    assert chronicle.last_day_header_date(lines) == (2026, 8, 12)
 
 
 def test_find_day_header_plain():
@@ -225,12 +189,14 @@ def test_is_blank_entry_dash_with_content_is_not_blank():
     assert chronicle.is_blank_entry("- did something") is False
 
 
-def test_cursor_flags_vim_enters_insert_mode_at_end_of_line():
-    assert chronicle.cursor_flags(["vim"]) == ["-c", "startinsert!"]
+def test_cursor_flags_vim_jumps_to_last_line_then_enters_insert_mode():
+    # Two prefilled lines now: the target-path header, then "- ". Without
+    # jumping to the last line first, startinsert! would land on line 1.
+    assert chronicle.cursor_flags(["vim"]) == ["-c", "$", "-c", "startinsert!"]
 
 
 def test_cursor_flags_nvim_same_as_vim():
-    assert chronicle.cursor_flags(["nvim"]) == ["-c", "startinsert!"]
+    assert chronicle.cursor_flags(["nvim"]) == ["-c", "$", "-c", "startinsert!"]
 
 
 def test_cursor_flags_unknown_editor_returns_nothing():
@@ -254,8 +220,40 @@ def test_cursor_flags_plain_vi_returns_nothing():
 
 
 def test_cursor_flags_matches_by_basename_not_full_path():
-    assert chronicle.cursor_flags(["/usr/bin/vim"]) == ["-c", "startinsert!"]
+    assert chronicle.cursor_flags(["/usr/bin/vim"]) == ["-c", "$", "-c", "startinsert!"]
 
 
 def test_cursor_flags_empty_argv_returns_nothing():
     assert chronicle.cursor_flags([]) == []
+
+
+def test_strip_target_header_line_exact_match_removes_it():
+    path = Path("/some/target.md")
+    raw = f"# {path}\n- my entry"
+    assert chronicle.strip_target_header_line(raw, path) == "- my entry"
+
+
+def test_strip_target_header_line_no_header_leaves_content_untouched():
+    path = Path("/some/target.md")
+    raw = "- my entry"
+    assert chronicle.strip_target_header_line(raw, path) == "- my entry"
+
+
+def test_strip_target_header_line_near_miss_is_kept():
+    # A first line that merely looks like a heading (or names a different
+    # path) must never be silently eaten.
+    path = Path("/some/target.md")
+    raw = "# /some/other.md\n- my entry"
+    assert chronicle.strip_target_header_line(raw, path) == raw
+
+
+def test_strip_target_header_line_header_only_no_trailing_newline():
+    path = Path("/some/target.md")
+    raw = f"# {path}"
+    assert chronicle.strip_target_header_line(raw, path) == ""
+
+
+def test_strip_target_header_line_real_entry_starting_with_hash_is_kept():
+    path = Path("/some/target.md")
+    raw = "# not the header line\nmore text"
+    assert chronicle.strip_target_header_line(raw, path) == raw

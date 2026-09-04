@@ -1,6 +1,4 @@
-"""Tests for chronicle's config-file I/O and root-dir resolution."""
-
-import configparser
+"""Tests for chronicle's config-file I/O and target-path resolution."""
 
 import chronicle
 import pytest
@@ -8,9 +6,9 @@ import pytest
 
 def test_load_config_parser_valid_ini(tmp_path):
     config_path = tmp_path / "chronicle.conf"
-    config_path.write_text("[chronicle]\nroot_dir = /some/dir\n")
+    config_path.write_text("[targets]\n0 = /some/file.md\n")
     parser = chronicle.load_config_parser(config_path)
-    assert parser.get("chronicle", "root_dir") == "/some/dir"
+    assert parser.get("targets", "0") == "/some/file.md"
 
 
 def test_load_config_parser_nonexistent_path(tmp_path):
@@ -28,184 +26,177 @@ def test_load_config_parser_malformed_ini(tmp_path, capsys):
     assert str(config_path) in capsys.readouterr().err
 
 
-def test_read_config_root_dir_missing_file(tmp_path):
-    assert chronicle.read_config_root_dir(tmp_path / "missing.conf") is None
-
-
-def test_read_config_root_dir_present(tmp_path):
+def test_load_config_parser_keys_are_case_sensitive(tmp_path):
     config_path = tmp_path / "chronicle.conf"
-    config_path.write_text("[chronicle]\nroot_dir = /some/dir\n")
-    assert chronicle.read_config_root_dir(config_path) == "/some/dir"
+    config_path.write_text("[targets]\nA = /upper.md\na = /lower.md\n")
+    parser = chronicle.load_config_parser(config_path)
+    assert parser.get("targets", "A") == "/upper.md"
+    assert parser.get("targets", "a") == "/lower.md"
 
 
-def test_read_config_root_dir_section_missing(tmp_path):
+def test_load_config_parser_default_section_does_not_leak_into_others(tmp_path):
+    # configparser's [DEFAULT] section is normally inherited by every other
+    # section; a [targets] section must be judged only on its own entries,
+    # since [DEFAULT] is a fairly ordinary INI section name someone could
+    # use for an unrelated purpose in the same file.
     config_path = tmp_path / "chronicle.conf"
-    config_path.write_text("[other]\nkey = value\n")
-    assert chronicle.read_config_root_dir(config_path) is None
+    config_path.write_text("[DEFAULT]\nfallback = /oops.md\n\n[targets]\n")
+    parser = chronicle.load_config_parser(config_path)
+    assert dict(parser["targets"]) == {}
 
 
-def test_read_config_root_dir_key_missing(tmp_path):
+def test_load_config_parser_percent_sign_in_value_is_not_interpolated(tmp_path):
     config_path = tmp_path / "chronicle.conf"
-    config_path.write_text("[chronicle]\nother_key = value\n")
-    assert chronicle.read_config_root_dir(config_path) is None
+    config_path.write_text("[targets]\n0 = /home/user/50%-done/notes.md\n")
+    parser = chronicle.load_config_parser(config_path)
+    assert parser.get("targets", "0") == "/home/user/50%-done/notes.md"
 
 
-def test_read_config_root_dir_malformed_propagates_exit(tmp_path):
+def test_resolve_target_path_explicit_key(tmp_path):
     config_path = tmp_path / "chronicle.conf"
-    config_path.write_text("no_section_header = oops\n")
-    with pytest.raises(SystemExit):
-        chronicle.read_config_root_dir(config_path)
+    target = tmp_path / "one.md"
+    config_path.write_text(f"[targets]\n0 = {target}\n1 = /other.md\n")
+
+    key, path = chronicle.resolve_target_path(config_path, "0", False)
+
+    assert key == "0"
+    assert path == target.resolve()
 
 
-def test_write_config_root_dir_creates_missing_parents(tmp_path):
-    config_path = tmp_path / "nested" / "dir" / "chronicle.conf"
-    chronicle.write_config_root_dir(config_path, "/some/dir")
-    assert config_path.exists()
-    assert chronicle.read_config_root_dir(config_path) == "/some/dir"
-
-
-def test_write_config_root_dir_preserves_other_settings(tmp_path):
+def test_resolve_target_path_default_uses_first_entry(tmp_path):
     config_path = tmp_path / "chronicle.conf"
-    config_path.write_text("[chronicle]\nroot_dir = /old/dir\n\n[other]\nkey = value\n")
-    chronicle.write_config_root_dir(config_path, "/new/dir")
+    first = tmp_path / "first.md"
+    config_path.write_text(f"[targets]\n1 = {first}\n0 = /second.md\n")
 
-    parser = configparser.ConfigParser()
-    parser.read(config_path)
-    assert parser.get("chronicle", "root_dir") == "/new/dir"
-    assert parser.get("other", "key") == "value"
+    key, path = chronicle.resolve_target_path(config_path, None, False)
+
+    assert key == "1"
+    assert path == first.resolve()
 
 
-def test_write_config_root_dir_overwrites_existing_value(tmp_path):
+def test_resolve_target_path_expands_tilde_and_relative(tmp_path):
     config_path = tmp_path / "chronicle.conf"
-    config_path.write_text("[chronicle]\nroot_dir = /old/dir\n")
-    chronicle.write_config_root_dir(config_path, "/new/dir")
-    assert chronicle.read_config_root_dir(config_path) == "/new/dir"
+    config_path.write_text("[targets]\n0 = ~/journal.md\n")
+
+    _, path = chronicle.resolve_target_path(config_path, "0", False)
+
+    assert "~" not in str(path)
+    assert path.is_absolute()
 
 
-def test_prompt_for_root_dir_non_interactive_exits(tmp_path, capsys):
+def test_resolve_target_path_unknown_key_exits_with_template(tmp_path, capsys):
     config_path = tmp_path / "chronicle.conf"
+    config_path.write_text("[targets]\n0 = /some/file.md\n")
+
     with pytest.raises(SystemExit) as exc_info:
-        chronicle.prompt_for_root_dir(config_path)
+        chronicle.resolve_target_path(config_path, "9", False)
+
     assert exc_info.value.code == 1
     stderr = capsys.readouterr().err
-    assert chronicle.ENV_VAR in stderr
-    assert chronicle.CONFIG_KEY in stderr
-    assert chronicle.CONFIG_SECTION in stderr
-    assert not config_path.exists()
+    assert '"9"' in stderr
+    assert "[targets]" in stderr
+    assert str(config_path) in stderr
 
 
-def test_prompt_for_root_dir_blank_answer_exits(monkeypatch, tmp_path):
+def test_resolve_target_path_missing_section_exits_with_template(tmp_path, capsys):
     config_path = tmp_path / "chronicle.conf"
-    monkeypatch.setattr(chronicle.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr("builtins.input", lambda prompt: "   ")
+    config_path.write_text("[other]\nkey = value\n")
+
     with pytest.raises(SystemExit) as exc_info:
-        chronicle.prompt_for_root_dir(config_path)
+        chronicle.resolve_target_path(config_path, "0", False)
+
     assert exc_info.value.code == 1
-    assert not config_path.exists()
+    assert "[targets]" in capsys.readouterr().err
 
 
-def test_prompt_for_root_dir_valid_answer_writes_config(monkeypatch, tmp_path):
-    config_path = tmp_path / "chronicle.conf"
-    answer_dir = tmp_path / "journal"
-    monkeypatch.setattr(chronicle.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr("builtins.input", lambda prompt: str(answer_dir))
-
-    result = chronicle.prompt_for_root_dir(config_path)
-
-    assert result == answer_dir.expanduser().resolve()
-    assert chronicle.read_config_root_dir(config_path) == str(answer_dir)
-
-
-def test_prompt_for_root_dir_expands_tilde(monkeypatch, tmp_path):
-    config_path = tmp_path / "chronicle.conf"
-    monkeypatch.setattr(chronicle.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr("builtins.input", lambda prompt: "~/journal")
-
-    result = chronicle.prompt_for_root_dir(config_path)
-
-    assert "~" not in str(result)
-    assert result.is_absolute()
-
-
-def test_resolve_chronicle_dir_env_var_wins_over_missing_explicit_config(
-    monkeypatch, tmp_path
-):
-    monkeypatch.setenv(chronicle.ENV_VAR, str(tmp_path / "from-env"))
+def test_resolve_target_path_missing_config_file_exits_with_template(tmp_path, capsys):
     missing_config = tmp_path / "does-not-exist.conf"
 
-    result = chronicle.resolve_chronicle_dir(
-        missing_config, config_path_is_explicit=True
-    )
-
-    assert result == (tmp_path / "from-env").resolve()
-
-
-def test_resolve_chronicle_dir_explicit_missing_config_exits(
-    monkeypatch, tmp_path, capsys
-):
-    missing_config = tmp_path / "does-not-exist.conf"
     with pytest.raises(SystemExit) as exc_info:
-        chronicle.resolve_chronicle_dir(missing_config, config_path_is_explicit=True)
+        chronicle.resolve_target_path(missing_config, None, False)
+
+    assert exc_info.value.code == 1
+    assert "[targets]" in capsys.readouterr().err
+
+
+def test_resolve_target_path_no_key_message_does_not_mention_a_key(tmp_path, capsys):
+    # Distinguishes the "nothing configured at all" message from the
+    # "this specific key is missing" one (which does quote a key).
+    missing_config = tmp_path / "does-not-exist.conf"
+
+    with pytest.raises(SystemExit):
+        chronicle.resolve_target_path(missing_config, None, False)
+
+    stderr = capsys.readouterr().err
+    assert "no targets configured" in stderr
+    assert '"' not in stderr.splitlines()[0]
+
+
+def test_resolve_target_path_blank_value_exits_with_template(tmp_path, capsys):
+    config_path = tmp_path / "chronicle.conf"
+    config_path.write_text("[targets]\n0 = \n")
+
+    with pytest.raises(SystemExit) as exc_info:
+        chronicle.resolve_target_path(config_path, "0", False)
+
+    assert exc_info.value.code == 1
+    stderr = capsys.readouterr().err
+    assert '"0"' in stderr
+    assert "[targets]" in stderr
+
+
+def test_resolve_target_path_empty_targets_section_no_key_exits(tmp_path, capsys):
+    config_path = tmp_path / "chronicle.conf"
+    config_path.write_text("[targets]\n")
+
+    with pytest.raises(SystemExit) as exc_info:
+        chronicle.resolve_target_path(config_path, None, False)
+
+    assert exc_info.value.code == 1
+    assert "[targets]" in capsys.readouterr().err
+
+
+def test_resolve_target_path_explicit_config_missing_file_distinct_error(
+    tmp_path, capsys
+):
+    missing_config = tmp_path / "does-not-exist.conf"
+
+    with pytest.raises(SystemExit) as exc_info:
+        chronicle.resolve_target_path(missing_config, "0", True)
+
     assert exc_info.value.code == 1
     assert "config file not found" in capsys.readouterr().err
 
 
-def test_resolve_chronicle_dir_explicit_config_with_value(tmp_path):
+def test_resolve_target_path_default_section_not_treated_as_a_target(tmp_path, capsys):
     config_path = tmp_path / "chronicle.conf"
-    root = tmp_path / "journal"
-    config_path.write_text(f"[chronicle]\nroot_dir = {root}\n")
+    config_path.write_text("[DEFAULT]\nfallback = /oops.md\n\n[targets]\n")
 
-    result = chronicle.resolve_chronicle_dir(config_path, config_path_is_explicit=True)
-
-    assert result == root.resolve()
-
-
-def test_resolve_chronicle_dir_default_missing_falls_through_to_prompt(tmp_path):
-    # Non-explicit + missing file is not a hard error; it falls through to
-    # the prompt, which (stdin is non-interactive, per the autouse fixture)
-    # exits cleanly rather than raising for a bad reason.
-    missing_config = tmp_path / "does-not-exist.conf"
     with pytest.raises(SystemExit) as exc_info:
-        chronicle.resolve_chronicle_dir(missing_config, config_path_is_explicit=False)
+        chronicle.resolve_target_path(config_path, None, False)
+
     assert exc_info.value.code == 1
+    assert "no targets configured" in capsys.readouterr().err
 
 
-def test_resolve_chronicle_dir_reaches_prompt_when_all_else_absent(
-    monkeypatch, tmp_path
-):
-    missing_config = tmp_path / "does-not-exist.conf"
-    called = {}
-
-    def fake_prompt(config_path):
-        called["config_path"] = config_path
-        return tmp_path / "prompted"
-
-    monkeypatch.setattr(chronicle, "prompt_for_root_dir", fake_prompt)
-
-    result = chronicle.resolve_chronicle_dir(
-        missing_config, config_path_is_explicit=False
-    )
-
-    assert called["config_path"] == missing_config
-    assert result == tmp_path / "prompted"
-
-
-def test_resolve_chronicle_dir_empty_config_value_falls_through_to_prompt(
-    monkeypatch, tmp_path
-):
+def test_resolve_target_path_value_with_percent_sign(tmp_path):
     config_path = tmp_path / "chronicle.conf"
-    config_path.write_text("[chronicle]\nroot_dir = \n")
-    monkeypatch.setattr(
-        chronicle, "prompt_for_root_dir", lambda config_path: tmp_path / "prompted"
-    )
+    target = tmp_path / "50%-done" / "notes.md"
+    config_path.write_text(f"[targets]\n0 = {target}\n")
 
-    result = chronicle.resolve_chronicle_dir(config_path, config_path_is_explicit=False)
+    _, path = chronicle.resolve_target_path(config_path, "0", False)
 
-    assert result == tmp_path / "prompted"
+    assert path == target.resolve()
 
 
-def test_resolve_chronicle_dir_expands_tilde_and_relative(monkeypatch, tmp_path):
-    monkeypatch.setenv(chronicle.ENV_VAR, "~/journal")
-    result = chronicle.resolve_chronicle_dir(tmp_path / "unused.conf", False)
-    assert "~" not in str(result)
-    assert result.is_absolute()
+def test_resolve_target_path_key_lookup_is_case_sensitive(tmp_path):
+    config_path = tmp_path / "chronicle.conf"
+    upper = tmp_path / "upper.md"
+    lower = tmp_path / "lower.md"
+    config_path.write_text(f"[targets]\nA = {upper}\na = {lower}\n")
+
+    _, path_upper = chronicle.resolve_target_path(config_path, "A", False)
+    _, path_lower = chronicle.resolve_target_path(config_path, "a", False)
+
+    assert path_upper == upper.resolve()
+    assert path_lower == lower.resolve()
