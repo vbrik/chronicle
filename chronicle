@@ -27,6 +27,11 @@ overridable with --config), e.g.:
 
 The key to write to is given as a positional argument (`chronicle 1`);
 omitted, it defaults to the first entry in `[targets]`.
+
+The key `*` is special only in one way: if configured, every entry written
+to any *other* target is also appended, verbatim, to the `*` target's file
+(e.g. `* = ~/notes/everything.md`). Written to directly (`chronicle '*'`),
+it's an ordinary target.
 """
 
 import argparse
@@ -43,6 +48,8 @@ from typing import NoReturn
 
 DEFAULT_CONFIG_PATH = Path("~/.config/chronicle/chronicle.conf").expanduser()
 TARGETS_SECTION = "targets"
+# Target key that additionally receives every entry written to any other target.
+ALL_TARGETS_KEY = "*"
 
 
 _DAY_HEADER_DATE_RE = re.compile(r"^### (\d{4})-(\d{2})-(\d{2})")
@@ -148,14 +155,17 @@ def exit_with_targets_template(config_path: Path, key: str | None) -> NoReturn:
 
 def resolve_target_path(
     config_path: Path, key: str | None, config_path_is_explicit: bool
-) -> tuple[str, Path]:
+) -> tuple[Path, Path | None]:
     """Resolve `key` (or the first configured target, if `key` is None) to its path.
 
-    Returns the resolved key alongside its path since the caller may not
-    have known it (the default case). Exits via `exit_with_targets_template`
-    if the config file/section/key can't provide an answer; exits with a
-    distinct "file not found" error if `--config` was given explicitly and
-    doesn't exist.
+    Returns `(path, mirror)`, where `mirror` is the path of the special
+    `ALL_TARGETS_KEY` target that every entry is also copied into, or None
+    when there's nothing to mirror into: `*` is unconfigured or blank, is
+    itself the target being written, or resolves to the same file as it.
+
+    Exits via `exit_with_targets_template` if the config file/section/key
+    can't provide an answer; exits with a distinct "file not found" error
+    if `--config` was given explicitly and doesn't exist.
     """
     if config_path_is_explicit and not config_path.exists():
         print(f"chronicle: config file not found: {config_path}", file=sys.stderr)
@@ -174,8 +184,15 @@ def resolve_target_path(
     value = targets.get(key)
     if not value:
         exit_with_targets_template(config_path, key)
+    path = Path(value).expanduser().resolve()
 
-    return key, Path(value).expanduser().resolve()
+    mirror = None
+    if key != ALL_TARGETS_KEY and (all_value := targets.get(ALL_TARGETS_KEY)):
+        mirror = Path(all_value).expanduser().resolve()
+        if mirror == path:
+            mirror = None
+
+    return path, mirror
 
 
 _CURSOR_FLAGS_BY_EDITOR = {
@@ -270,7 +287,8 @@ def parse_args() -> argparse.Namespace:
         metavar="KEY",
         help=(
             f"target key from [{TARGETS_SECTION}] in the config file "
-            "(default: first entry)"
+            "(default: first entry); entries also go to the "
+            f"'{ALL_TARGETS_KEY}' target, if configured"
         ),
     )
     parser.add_argument(
@@ -303,20 +321,13 @@ def is_blank_entry(entry: str) -> bool:
     return entry.strip() in ("", "-")
 
 
-def main() -> int:
-    args = parse_args()
+def append_entry(path: Path, entry: str, today: datetime.date) -> None:
+    """Append `entry` under `today`'s day heading in `path`, creating headings as needed.
 
-    config_path_is_explicit = args.config is not None
-    config_path = args.config.expanduser() if args.config else DEFAULT_CONFIG_PATH
-    _, path = resolve_target_path(config_path, args.target, config_path_is_explicit)
-
-    raw = edit_entry(path)
-    entry = format_entry(strip_target_header_line(raw, path))
-    if is_blank_entry(entry):
-        # Nothing meaningful was entered: nothing to log, not an error.
-        return 0
-
-    today = datetime.date.today()
+    The file (and its parent directories) is created if missing. Headings
+    are decided from this file's own content alone, so the same entry can
+    land in a fresh day section in one file and an existing one in another.
+    """
     month_header = f"## {today.strftime('%B')}"
     day_header = f"### {today.isoformat()}, {today.strftime('%A')}"
 
@@ -343,6 +354,29 @@ def main() -> int:
         lines.append(entry + "\n")
 
     path.write_text("".join(lines))
+
+
+def main() -> int:
+    args = parse_args()
+
+    config_path_is_explicit = args.config is not None
+    config_path = args.config.expanduser() if args.config else DEFAULT_CONFIG_PATH
+    path, mirror = resolve_target_path(
+        config_path, args.target, config_path_is_explicit
+    )
+
+    raw = edit_entry(path)
+    entry = format_entry(strip_target_header_line(raw, path))
+    if is_blank_entry(entry):
+        # Nothing meaningful was entered: nothing to log, not an error.
+        return 0
+
+    # Naive local date on purpose: entries are filed under the user's
+    # wall-clock day, whatever timezone they happen to be in.
+    today = datetime.date.today()  # noqa: DTZ011
+    append_entry(path, entry, today)
+    if mirror is not None:
+        append_entry(mirror, entry, today)
     print(entry)
     return 0
 

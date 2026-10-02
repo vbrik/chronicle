@@ -10,7 +10,8 @@ chronicle [KEY]
 ```
 
 `KEY` selects which configured target file to write to (see Setup below);
-if omitted, the first target in the config file is used.
+if omitted, the first target in the config file is used. A target keyed
+`*`, if configured, additionally collects a copy of every entry.
 
 `chronicle` opens `$EDITOR` (defaulting to `vi`) on a temporary file
 prefilled with two lines: `# <target file path>`, so you can see where
@@ -72,6 +73,27 @@ in this section (`0` above); `chronicle 1` writes to the inbox. Since the
 key is just a config lookup, there's no automatic date-based file
 rollover — update a target's path by hand (e.g. each new quarter) when
 you want entries to start landing in a different file.
+
+### Catch-all target: `*`
+
+A target with the key `*` also receives a verbatim copy of every entry
+written to any other target, giving you one combined log across all of
+them:
+
+```ini
+[targets]
+0 = ~/proj/notes/notes/chronicles/2026-q3.md
+1 = ~/proj/notes/notes/__inbox/_inbox.md
+* = ~/proj/notes/notes/everything.md
+```
+
+Here `chronicle 1` appends to both the inbox and `everything.md`, each
+file getting its own month/day headings as needed. Otherwise `*` is an
+ordinary target: `chronicle '*'` writes to it alone, and if it's listed
+first it's the default. Quote it on the command line (`'*'` or `\*`) —
+an unquoted `*` may be expanded by your shell into the current
+directory's file names before `chronicle` ever sees it. If `*` points at the same file as the target
+being written, the entry is written only once.
 
 A target file doesn't need to have been written by `chronicle` before —
 if it has no heading for today, one is appended at the end, leaving any

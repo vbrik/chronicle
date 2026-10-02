@@ -321,6 +321,162 @@ def test_main_unknown_target_key_exits(monkeypatch, tmp_path, capsys):
     assert '"9"' in capsys.readouterr().err
 
 
+def _configure_targets(targets):
+    """Write a [targets] section mapping each key in `targets` to its path, in order."""
+    body = "".join(f"{key} = {path}\n" for key, path in targets.items())
+    chronicle.DEFAULT_CONFIG_PATH.write_text(f"[targets]\n{body}")
+
+
+def test_main_mirrors_entry_into_all_target(monkeypatch, tmp_path, freeze_date, capsys):
+    freeze_date(2026, 8, 12)
+    target_file = tmp_path / "target.md"
+    all_file = tmp_path / "all.md"
+    _configure_targets({"0": target_file, "*": all_file})
+
+    rc = _run_main(monkeypatch, ["0"], editor_content="- my entry")
+
+    assert rc == 0
+    expected = "## August\n\n### 2026-08-12, Wednesday\n- my entry\n"
+    assert target_file.read_text() == expected
+    assert all_file.read_text() == expected
+    # Echoed once, not once per file written.
+    assert capsys.readouterr().out == "- my entry\n"
+
+
+def test_main_mirrors_entry_for_default_key(monkeypatch, tmp_path, freeze_date):
+    freeze_date(2026, 8, 12)
+    target_file = tmp_path / "target.md"
+    all_file = tmp_path / "all.md"
+    _configure_targets({"0": target_file, "*": all_file})
+
+    rc = _run_main(monkeypatch, [], editor_content="my entry")
+
+    assert rc == 0
+    assert target_file.read_text().endswith("my entry\n")
+    assert all_file.read_text().endswith("my entry\n")
+
+
+def test_main_all_target_gets_its_own_headings(monkeypatch, tmp_path, freeze_date):
+    # The mirror's month/day headings depend on its own content, not the
+    # primary target's: here the primary already has today's section while
+    # "*" was last written in an earlier month.
+    freeze_date(2026, 8, 12)
+    target_file = tmp_path / "target.md"
+    target_file.write_text("## August\n\n### 2026-08-12, Wednesday\nearlier\n")
+    all_file = tmp_path / "all.md"
+    all_file.write_text("## July\n\n### 2026-07-31, Friday\nold\n")
+    _configure_targets({"1": target_file, "*": all_file})
+
+    rc = _run_main(monkeypatch, ["1"], editor_content="new")
+
+    assert rc == 0
+    assert target_file.read_text() == (
+        "## August\n\n### 2026-08-12, Wednesday\nearlier\nnew\n"
+    )
+    assert all_file.read_text() == (
+        "## July\n"
+        "\n"
+        "### 2026-07-31, Friday\n"
+        "old\n"
+        "## August\n"
+        "\n"
+        "### 2026-08-12, Wednesday\n"
+        "new\n"
+    )
+
+
+def test_main_accumulates_entries_from_several_targets_in_all_target(
+    monkeypatch, tmp_path, freeze_date
+):
+    freeze_date(2026, 8, 12)
+    first = tmp_path / "first.md"
+    second = tmp_path / "second.md"
+    all_file = tmp_path / "all.md"
+    _configure_targets({"0": first, "1": second, "*": all_file})
+
+    _run_main(monkeypatch, ["0"], editor_content="- from zero")
+    _run_main(monkeypatch, ["1"], editor_content="- from one")
+
+    assert first.read_text().endswith("### 2026-08-12, Wednesday\n- from zero\n")
+    assert second.read_text().endswith("### 2026-08-12, Wednesday\n- from one\n")
+    assert all_file.read_text() == (
+        "## August\n\n### 2026-08-12, Wednesday\n- from zero\n- from one\n"
+    )
+
+
+def test_main_all_target_written_directly_only_once(monkeypatch, tmp_path, freeze_date):
+    freeze_date(2026, 8, 12)
+    target_file = tmp_path / "target.md"
+    all_file = tmp_path / "all.md"
+    _configure_targets({"0": target_file, "*": all_file})
+
+    rc = _run_main(monkeypatch, ["*"], editor_content="direct")
+
+    assert rc == 0
+    assert all_file.read_text() == "## August\n\n### 2026-08-12, Wednesday\ndirect\n"
+    assert not target_file.exists()
+
+
+def test_main_all_target_same_file_as_key_written_once(
+    monkeypatch, tmp_path, freeze_date
+):
+    freeze_date(2026, 8, 12)
+    shared = tmp_path / "shared.md"
+    _configure_targets({"0": shared, "*": shared})
+
+    rc = _run_main(monkeypatch, ["0"], editor_content="once")
+
+    assert rc == 0
+    assert shared.read_text() == "## August\n\n### 2026-08-12, Wednesday\nonce\n"
+
+
+def test_main_blank_entry_writes_neither_target_nor_all_target(
+    monkeypatch, tmp_path, freeze_date
+):
+    freeze_date(2026, 8, 12)
+    target_file = tmp_path / "target.md"
+    all_file = tmp_path / "all.md"
+    _configure_targets({"0": target_file, "*": all_file})
+
+    rc = _run_main(monkeypatch, ["0"], editor_content="- ")
+
+    assert rc == 0
+    assert not target_file.exists()
+    assert not all_file.exists()
+
+
+def test_main_all_target_creates_missing_parent_dirs(
+    monkeypatch, tmp_path, freeze_date
+):
+    freeze_date(2026, 8, 12)
+    all_file = tmp_path / "nested" / "dir" / "all.md"
+    _configure_targets({"0": tmp_path / "target.md", "*": all_file})
+
+    rc = _run_main(monkeypatch, ["0"], editor_content="entry")
+
+    assert rc == 0
+    assert all_file.read_text().endswith("entry\n")
+
+
+def test_main_editor_header_names_primary_target_only(
+    monkeypatch, tmp_path, freeze_date
+):
+    freeze_date(2026, 8, 12)
+    target_file = tmp_path / "target.md"
+    _configure_targets({"0": target_file, "*": tmp_path / "all.md"})
+    seen = []
+
+    def fake_edit_entry(path):
+        seen.append(path)
+        return "entry"
+
+    monkeypatch.setattr(chronicle, "edit_entry", fake_edit_entry)
+    monkeypatch.setattr(chronicle.sys, "argv", ["chronicle", "0"])
+    chronicle.main()
+
+    assert seen == [target_file.resolve()]
+
+
 def test_main_strips_injected_header_line_end_to_end(
     monkeypatch, tmp_path, freeze_date
 ):

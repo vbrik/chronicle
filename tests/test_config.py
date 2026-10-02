@@ -57,9 +57,8 @@ def test_resolve_target_path_explicit_key(tmp_path):
     target = tmp_path / "one.md"
     config_path.write_text(f"[targets]\n0 = {target}\n1 = /other.md\n")
 
-    key, path = chronicle.resolve_target_path(config_path, "0", False)
+    path, _ = chronicle.resolve_target_path(config_path, "0", False)
 
-    assert key == "0"
     assert path == target.resolve()
 
 
@@ -68,9 +67,8 @@ def test_resolve_target_path_default_uses_first_entry(tmp_path):
     first = tmp_path / "first.md"
     config_path.write_text(f"[targets]\n1 = {first}\n0 = /second.md\n")
 
-    key, path = chronicle.resolve_target_path(config_path, None, False)
+    path, _ = chronicle.resolve_target_path(config_path, None, False)
 
-    assert key == "1"
     assert path == first.resolve()
 
 
@@ -78,7 +76,7 @@ def test_resolve_target_path_expands_tilde_and_relative(tmp_path):
     config_path = tmp_path / "chronicle.conf"
     config_path.write_text("[targets]\n0 = ~/journal.md\n")
 
-    _, path = chronicle.resolve_target_path(config_path, "0", False)
+    path, _ = chronicle.resolve_target_path(config_path, "0", False)
 
     assert "~" not in str(path)
     assert path.is_absolute()
@@ -184,7 +182,7 @@ def test_resolve_target_path_value_with_percent_sign(tmp_path):
     target = tmp_path / "50%-done" / "notes.md"
     config_path.write_text(f"[targets]\n0 = {target}\n")
 
-    _, path = chronicle.resolve_target_path(config_path, "0", False)
+    path, _ = chronicle.resolve_target_path(config_path, "0", False)
 
     assert path == target.resolve()
 
@@ -195,8 +193,122 @@ def test_resolve_target_path_key_lookup_is_case_sensitive(tmp_path):
     lower = tmp_path / "lower.md"
     config_path.write_text(f"[targets]\nA = {upper}\na = {lower}\n")
 
-    _, path_upper = chronicle.resolve_target_path(config_path, "A", False)
-    _, path_lower = chronicle.resolve_target_path(config_path, "a", False)
+    path_upper, _ = chronicle.resolve_target_path(config_path, "A", False)
+    path_lower, _ = chronicle.resolve_target_path(config_path, "a", False)
 
     assert path_upper == upper.resolve()
     assert path_lower == lower.resolve()
+
+
+def test_resolve_target_path_no_all_target_means_no_mirror(tmp_path):
+    config_path = tmp_path / "chronicle.conf"
+    config_path.write_text(f"[targets]\n0 = {tmp_path / 'one.md'}\n")
+
+    _, mirror = chronicle.resolve_target_path(config_path, "0", False)
+
+    assert mirror is None
+
+
+def test_resolve_target_path_all_target_is_mirror_for_other_keys(tmp_path):
+    config_path = tmp_path / "chronicle.conf"
+    one = tmp_path / "one.md"
+    everything = tmp_path / "all.md"
+    config_path.write_text(f"[targets]\n0 = {one}\n* = {everything}\n")
+
+    path, mirror = chronicle.resolve_target_path(config_path, "0", False)
+
+    assert path == one.resolve()
+    assert mirror == everything.resolve()
+
+
+def test_resolve_target_path_all_target_mirrors_default_key(tmp_path):
+    config_path = tmp_path / "chronicle.conf"
+    one = tmp_path / "one.md"
+    everything = tmp_path / "all.md"
+    config_path.write_text(f"[targets]\n0 = {one}\n* = {everything}\n")
+
+    path, mirror = chronicle.resolve_target_path(config_path, None, False)
+
+    assert path == one.resolve()
+    assert mirror == everything.resolve()
+
+
+def test_resolve_target_path_all_target_mirror_expands_tilde(tmp_path):
+    config_path = tmp_path / "chronicle.conf"
+    config_path.write_text(f"[targets]\n0 = {tmp_path / 'one.md'}\n* = ~/all.md\n")
+
+    _, mirror = chronicle.resolve_target_path(config_path, "0", False)
+
+    assert "~" not in str(mirror)
+    assert mirror.is_absolute()
+
+
+def test_resolve_target_path_all_target_itself_has_no_mirror(tmp_path):
+    config_path = tmp_path / "chronicle.conf"
+    everything = tmp_path / "all.md"
+    config_path.write_text(f"[targets]\n0 = {tmp_path / 'one.md'}\n* = {everything}\n")
+
+    path, mirror = chronicle.resolve_target_path(config_path, "*", False)
+
+    assert path == everything.resolve()
+    assert mirror is None
+
+
+def test_resolve_target_path_all_target_as_first_entry_is_the_default(tmp_path):
+    config_path = tmp_path / "chronicle.conf"
+    everything = tmp_path / "all.md"
+    config_path.write_text(f"[targets]\n* = {everything}\n0 = {tmp_path / 'one.md'}\n")
+
+    path, mirror = chronicle.resolve_target_path(config_path, None, False)
+
+    assert path == everything.resolve()
+    assert mirror is None
+
+
+def test_resolve_target_path_blank_all_target_means_no_mirror(tmp_path):
+    config_path = tmp_path / "chronicle.conf"
+    one = tmp_path / "one.md"
+    config_path.write_text(f"[targets]\n0 = {one}\n* =\n")
+
+    path, mirror = chronicle.resolve_target_path(config_path, "0", False)
+
+    assert path == one.resolve()
+    assert mirror is None
+
+
+def test_resolve_target_path_blank_all_target_requested_directly_exits(
+    tmp_path, capsys
+):
+    config_path = tmp_path / "chronicle.conf"
+    config_path.write_text(f"[targets]\n0 = {tmp_path / 'one.md'}\n* =\n")
+
+    with pytest.raises(SystemExit) as exc_info:
+        chronicle.resolve_target_path(config_path, "*", False)
+
+    assert exc_info.value.code == 1
+    assert '"*"' in capsys.readouterr().err
+
+
+def test_resolve_target_path_all_target_same_file_as_key_means_no_mirror(tmp_path):
+    config_path = tmp_path / "chronicle.conf"
+    shared = tmp_path / "shared.md"
+    # Spelled differently, but resolves to the same file.
+    config_path.write_text(
+        f"[targets]\n0 = {shared}\n* = {tmp_path / 'sub' / '..' / 'shared.md'}\n"
+    )
+
+    path, mirror = chronicle.resolve_target_path(config_path, "0", False)
+
+    assert path == shared.resolve()
+    assert mirror is None
+
+
+def test_resolve_target_path_all_target_key_is_not_globbed(tmp_path):
+    """Only the literal key "*" is special; it's not a wildcard over other keys."""
+    config_path = tmp_path / "chronicle.conf"
+    config_path.write_text(f"[targets]\n0 = {tmp_path / 'one.md'}\n")
+
+    with pytest.raises(SystemExit) as exc_info:
+        chronicle.resolve_target_path(config_path, "*", False)
+
+    assert exc_info.value.code == 1
